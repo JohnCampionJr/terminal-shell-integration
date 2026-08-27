@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Description>
+      Prepares a shell to report what it is doing — OSC 133 prompt marks and OSC 7 working
+      directory — by injecting integration at spawn. No UI, no PTY, no emulator: it turns a shell
+      path plus arguments and environment into the arguments and environment to spawn instead.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The scripts must exist as real files on disk, because a shell sources a path. -->
+    <None Include="shell-integration/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

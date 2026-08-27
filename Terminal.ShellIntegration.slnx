@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Terminal.ShellIntegration/Terminal.ShellIntegration.csproj" />
+  <Project Path="src/Terminal.ShellIntegration.Tests/Terminal.ShellIntegration.Tests.csproj" />
+</Solution>
