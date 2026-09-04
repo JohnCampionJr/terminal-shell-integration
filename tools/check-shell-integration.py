@@ -5,6 +5,7 @@
     python3 tools/check-shell-integration.py bash /opt/homebrew/bin/bash
     python3 tools/check-shell-integration.py bash
     python3 tools/check-shell-integration.py fish
+    python3 tools/check-shell-integration.py pwsh
 
 Build the library first, so the scripts are in its output directory:
 
@@ -47,6 +48,7 @@ if not os.path.isdir(resources):
 env = dict(os.environ)
 env["TERMINAL_SHELL_RESOURCES"] = resources
 env["PS1"] = "$ "
+env["TERMINAL_SHELL_INTEGRATION"] = "1"
 
 if SHELL == "bash":
     env["TERMINAL_SHELL_BASH_INJECT"] = ""
@@ -61,6 +63,11 @@ elif SHELL == "fish":
     existing = env.get("XDG_DATA_DIRS", "")
     env["XDG_DATA_DIRS"] = resources + (os.pathsep + existing if existing else "")
     argv = [BINARY, "-i"]
+elif SHELL == "pwsh":
+    # -Command runs after the profiles, so the script wraps whatever prompt they installed.
+    # -NoLogo keeps the banner out of the capture; -NoExit is what makes it interactive after.
+    script = os.path.join(resources, "pwsh", "integration.ps1")
+    argv = [BINARY, "-NoLogo", "-NoExit", "-Command", f". '{script}'"]
 else:
     sys.exit(f"unknown shell {SHELL}")
 
@@ -68,11 +75,21 @@ pid, fd = pty.fork()
 if pid == 0:
     os.execvpe(argv[0], argv, env)
 
+# A real terminal always tells the pty its size; a 0x0 window makes some line editors refuse to
+# initialise, and PSReadLine is one of them.
+import fcntl, struct, termios
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+
 # Modern shells interrogate the terminal before drawing anything — fish asks for the kitty keyboard
 # flags, the terminal version, the background colour, terminfo capabilities and the device
 # attributes, and then WAITS. A harness that stays silent leaves it blocked before its first prompt,
 # which looks identical to integration that never loaded. So this answers, minimally but plausibly.
 QUERIES = [
+    # Answer each query ONCE. PowerShell's console asks where the cursor is (DSR 6, below) on
+    # every prompt, and .NET consumes exactly one reply; a second one arrives when nobody is
+    # waiting and PSReadLine reads it as keystrokes -- "1;1R" typed in front of every command, so
+    # every command is a parse error and even `exit` fails. That was a duplicated entry in this
+    # list, and it cost an afternoon, because the symptom looks like the shell being broken.
     (re.compile(rb"\x1b\[\?u"), b"\x1b[?0u"),                              # kitty keyboard flags
     (re.compile(rb"\x1b\[>0?q"), b"\x1bP>|check-shell-integration\x1b\\"),  # XTVERSION
     (re.compile(rb"\x1b\]11;\?(?:\x07|\x1b\\)"),
@@ -89,7 +106,11 @@ def pump(fd, seconds, sink):
     """Read for a while, answering anything the shell asks."""
     end = time.time() + seconds
     while time.time() < end:
-        ready, _, _ = select.select([fd], [], [], 0.05)
+        # A real terminal answers a query in well under a millisecond. .NET's console reads the
+        # reply to its cursor query with a short window, and a reply arriving after it lands in
+        # the INPUT buffer as keystrokes -- "1;1R" typed into the command line. So the loop spins
+        # tight rather than sleeping.
+        ready, _, _ = select.select([fd], [], [], 0.005)
         if not ready:
             continue
         try:
@@ -112,17 +133,25 @@ chunks = []
 pump(fd, 2.0, chunks)
 
 # Two commands with different exit statuses, so D can be checked for carrying the right one.
-os.write(fd, b"echo hello\n")
+# CR, not LF: Enter is 0x0D on the wire. The line discipline maps it for bash, zsh and fish, but
+# PSReadLine puts the tty in raw mode and reads keys itself, and LF is Ctrl+J to it -- three
+# commands sent with LF became one line that never ran.
+os.write(fd, b"echo hello\r")
 pump(fd, 1.0, chunks)
-os.write(fd, b"false\n")
+os.write(fd, b"false\r")
 pump(fd, 1.0, chunks)
-os.write(fd, b"exit\n")
+os.write(fd, b"exit\r")
 pump(fd, 1.5, chunks)
 
 out = b"".join(chunks)
 text = out.decode("utf-8", "replace")
+
+if os.environ.get("RAW"):
+    # The stream itself, escapes made visible -- what to read when the marks are wrong.
+    print(text.replace("\x1b", "<ESC>").replace("\x07", "<BEL>").replace("\r", "<CR>"))
+    print("-" * 60)
 marks = re.findall(r"\x1b\]133;([A-D])(?:;(\d+))?\x07", text)
-cwd = re.findall(r"\x1b\]7;([^\x07]*)\x07", text)
+cwd = re.findall(r"\x1b\](?:7|9;9);([^\x07]*)\x07", text)
 
 print(f"shell    : {SHELL}  ({BINARY})")
 print("133 marks:", " ".join(m[0] + (f"({m[1]})" if m[1] else "") for m in marks) or "NONE")

@@ -22,7 +22,7 @@ public class ShellIntegrationTests
     {
         // The real layout, because Prepare refuses to instrument a shell whose scripts are absent.
         _resources = Path.Combine(Path.GetTempPath(), "shell-integration-tests", Guid.NewGuid().ToString("n"));
-        foreach (var shell in new[] { "bash", "zsh", "fish" })
+        foreach (var shell in new[] { "bash", "zsh", "fish", "pwsh" })
             Directory.CreateDirectory(Path.Combine(_resources, shell));
     }
 
@@ -42,6 +42,10 @@ public class ShellIntegrationTests
     [TestCase("/bin/bash", ShellKind.Bash)]
     [TestCase("/usr/local/bin/zsh", ShellKind.Zsh)]
     [TestCase("fish", ShellKind.Fish)]
+    [TestCase("pwsh", ShellKind.PowerShell)]
+    [TestCase("/usr/local/bin/pwsh", ShellKind.PowerShell)]
+    [TestCase("C:\\Program Files\\PowerShell\\7\\pwsh.exe", ShellKind.PowerShell)]
+    [TestCase("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", ShellKind.PowerShell)]
     [TestCase("/bin/sh", ShellKind.Unknown)]
     [TestCase("", ShellKind.Unknown)]
     public void Identifies_the_shell(string path, ShellKind expected)
@@ -266,4 +270,101 @@ public class ShellIntegrationTests
         Assert.That(env.ContainsKey(ShellIntegration.MarkerVariable), Is.False);
         Assert.That(env.ContainsKey("ZDOTDIR"), Is.False);
     }
+
+    // ---- PowerShell -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Nothing of the user's is touched: their arguments stay, and the script arrives through
+    /// <c>-NoExit -Command</c> after the profiles have run, which is what lets it wrap the prompt
+    /// they installed rather than replace it.
+    /// </summary>
+    [Test]
+    public void PowerShell_dot_sources_the_script_after_the_users_arguments()
+    {
+        var result = Prepare("pwsh", new[] { "-NoLogo" });
+
+        Assert.That(result.Injected, Is.True);
+        Assert.That(result.Kind, Is.EqualTo(ShellKind.PowerShell));
+        Assert.That(result.Args, Is.EqualTo(new[]
+        {
+            "-NoLogo", "-NoExit", "-Command", $". '{Path.Combine(_resources, "pwsh", "integration.ps1")}'",
+        }));
+    }
+
+    /// <summary>
+    /// <c>-Login</c> must be the first argument -- PowerShell rejects it anywhere else -- so it
+    /// is kept in front of everything this adds.
+    /// </summary>
+    [TestCase("-Login")]
+    [TestCase("-l")]
+    public void PowerShell_keeps_login_first(string login)
+    {
+        var result = Prepare("pwsh", new[] { login, "-NoLogo" });
+
+        Assert.That(result.Args[0], Is.EqualTo(login));
+        Assert.That(result.Args[^2], Is.EqualTo("-Command"));
+    }
+
+    /// <summary>
+    /// -NoProfile still gets integration. That is the point of arriving by -Command: a
+    /// profile-based mechanism could never instrument a shell told to skip profiles.
+    /// </summary>
+    [Test]
+    public void PowerShell_with_no_profile_is_still_instrumented()
+    {
+        Assert.That(Prepare("pwsh", new[] { "-NoProfile" }).Injected, Is.True);
+    }
+
+    /// <summary>
+    /// The POSIX rule would get these wrong in both directions: -ExecutionPolicy contains a c
+    /// and is interactive; -File contains none and is not.
+    /// </summary>
+    [TestCase("-Command", "Get-Date")]
+    [TestCase("-c", "Get-Date")]
+    [TestCase("-File", "script.ps1")]
+    [TestCase("-f", "script.ps1")]
+    [TestCase("-EncodedCommand", "RwBlAHQALQBEAGEAdABlAA==")]
+    [TestCase("-ec", "RwBlAHQALQBEAGEAdABlAA==")]
+    [TestCase("-NonInteractive", "")]
+    public void PowerShell_one_shot_switches_are_left_alone(string option, string value)
+    {
+        var args = string.IsNullOrEmpty(value) ? new[] { option } : new[] { option, value };
+        var result = Prepare("pwsh", args);
+
+        Assert.That(result.Injected, Is.False);
+        Assert.That(result.Skipped, Is.EqualTo(SkipReason.NotInteractive));
+        Assert.That(result.Args, Is.EqualTo(args));
+    }
+
+    [TestCase("-ExecutionPolicy", "Bypass")]
+    [TestCase("-NoLogo", "")]
+    [TestCase("-WorkingDirectory", "/tmp")]
+    public void PowerShell_options_that_merely_contain_a_c_are_still_interactive(string option, string value)
+    {
+        var args = string.IsNullOrEmpty(value) ? new[] { option } : new[] { option, value };
+
+        Assert.That(Prepare("pwsh", args).Injected, Is.True);
+    }
+
+    /// <summary>A path with an apostrophe is the one thing that can break a single-quoted string.</summary>
+    [Test]
+    public void PowerShell_quotes_an_apostrophe_in_the_resources_path()
+    {
+        var odd = Path.Combine(_resources, "o'brien");
+        Directory.CreateDirectory(Path.Combine(odd, "pwsh"));
+
+        var result = ShellIntegration.Prepare("pwsh", null, new Dictionary<string, string>(), odd);
+
+        Assert.That(result.Args[^1], Does.Contain("o''brien"));
+    }
+
+    [Test]
+    public void PowerShell_is_marked_so_a_child_shell_is_left_alone()
+    {
+        var result = Prepare("pwsh");
+
+        Assert.That(result.Environment[ShellIntegration.MarkerVariable], Is.EqualTo("1"));
+        Assert.That(Prepare("pwsh", env: result.Environment).Skipped, Is.EqualTo(SkipReason.AlreadyInjected));
+    }
 }
+

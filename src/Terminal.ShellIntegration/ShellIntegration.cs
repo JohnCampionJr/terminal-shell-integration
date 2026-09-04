@@ -9,6 +9,9 @@ public enum ShellKind
     Bash,
     Zsh,
     Fish,
+
+    /// <summary>pwsh, or Windows PowerShell 5.1 — the script is written for both.</summary>
+    PowerShell,
 }
 
 /// <summary>
@@ -88,7 +91,7 @@ public static class ShellIntegration
     /// <param name="args">Its arguments, not including the program itself.</param>
     /// <param name="environment">The environment it would otherwise inherit.</param>
     /// <param name="resourcesDirectory">
-    /// The directory holding <c>bash/</c>, <c>zsh/</c> and <c>fish/</c>. The host owns this because
+    /// The directory holding <c>bash/</c>, <c>zsh/</c>, <c>fish/</c> and <c>pwsh/</c>. The host owns this because
     /// only the host knows where its files are.
     /// </param>
     public static ShellIntegrationResult Prepare(
@@ -114,10 +117,10 @@ public static class ShellIntegration
 
         // -c runs a command and exits. There is no prompt to mark, and rewriting the arguments of a
         // one-shot command is a good way to break it.
-        if (IsNonInteractive(originalArgs))
+        if (IsNonInteractive(kind, originalArgs))
             return new(originalArgs, env, kind, false, SkipReason.NotInteractive);
 
-        var shellResources = Path.Combine(resourcesDirectory, kind.ToString().ToLowerInvariant());
+        var shellResources = Path.Combine(resourcesDirectory, ResourceFolder(kind));
         if (!Directory.Exists(shellResources))
             return new(originalArgs, env, kind, false, SkipReason.ResourcesMissing);
 
@@ -129,6 +132,7 @@ public static class ShellIntegration
             ShellKind.Bash => PrepareBash(originalArgs, env, shellResources, kind),
             ShellKind.Zsh => PrepareZsh(originalArgs, env, shellResources, kind),
             ShellKind.Fish => PrepareFish(originalArgs, env, shellResources, kind),
+            ShellKind.PowerShell => PreparePowerShell(originalArgs, env, shellResources, kind),
             _ => new(originalArgs, env, kind, false, SkipReason.UnsupportedShell),
         };
     }
@@ -167,12 +171,20 @@ public static class ShellIntegration
             "bash" => ShellKind.Bash,
             "zsh" => ShellKind.Zsh,
             "fish" => ShellKind.Fish,
+            "pwsh" or "powershell" => ShellKind.PowerShell,
             _ => ShellKind.Unknown,
         };
     }
 
-    private static bool IsNonInteractive(IReadOnlyList<string> args)
+    /// <summary>The folder a shell's scripts live in. pwsh's is named for the binary, not the kind.</summary>
+    private static string ResourceFolder(ShellKind kind) =>
+        kind == ShellKind.PowerShell ? "pwsh" : kind.ToString().ToLowerInvariant();
+
+    private static bool IsNonInteractive(ShellKind kind, IReadOnlyList<string> args)
     {
+        if (kind == ShellKind.PowerShell)
+            return IsNonInteractivePowerShell(args);
+
         foreach (var arg in args)
         {
             if (arg == "-c" || arg == "--command")
@@ -184,6 +196,71 @@ public static class ShellIntegration
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// PowerShell's one-shot switches.
+    /// </summary>
+    /// <remarks>
+    /// PowerShell uses single-dash long options, case-insensitive, and accepts unambiguous prefixes
+    /// of them -- so the POSIX test above would be wrong in both directions: <c>-ExecutionPolicy</c>
+    /// contains a <c>c</c> and is interactive, while <c>-File</c> contains none and is not. The
+    /// spellings here are the documented aliases; a bare <c>-e</c> is <c>-EncodedCommand</c>.
+    /// </remarks>
+    private static bool IsNonInteractivePowerShell(IReadOnlyList<string> args)
+    {
+        foreach (var arg in args)
+        {
+            if (arg.Length < 2 || arg[0] != '-')
+                continue;
+
+            switch (arg[1..].ToLowerInvariant())
+            {
+                case "command": case "c":
+                case "file": case "f":
+                case "encodedcommand": case "ec": case "enc": case "e":
+                case "noninteractive":
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// PowerShell, via <c>-NoExit -Command</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>No profile is touched and none is displaced. <c>-Command</c> runs after the profiles,
+    /// so the script finds <c>$function:prompt</c> already holding whatever the user installed --
+    /// oh-my-posh, starship, their own -- and wraps it. It also means <c>-NoProfile</c> still gets
+    /// integration, which a profile-based mechanism could never give.</para>
+    /// <para>The one ordering rule: <c>-Login</c> has to be the first argument, so it is kept there
+    /// and everything else goes before <c>-Command</c>, which consumes the rest of the line.</para>
+    /// </remarks>
+    private static ShellIntegrationResult PreparePowerShell(
+        List<string> args, Dictionary<string, string> env, string resources, ShellKind kind)
+    {
+        var script = Path.Combine(resources, "integration.ps1");
+
+        var prepared = new List<string>();
+        var rest = new List<string>(args);
+
+        if (rest.Count > 0 && (rest[0].Equals("-l", StringComparison.OrdinalIgnoreCase)
+                               || rest[0].Equals("-Login", StringComparison.OrdinalIgnoreCase)))
+        {
+            prepared.Add(rest[0]);
+            rest.RemoveAt(0);
+        }
+
+        prepared.AddRange(rest);
+        prepared.Add("-NoExit");
+        prepared.Add("-Command");
+
+        // Single-quoted, with the only character that means anything inside single quotes doubled.
+        prepared.Add(". '" + script.Replace("'", "''") + "'");
+
+        return new(prepared, env, kind, true);
     }
 
     /// <summary>

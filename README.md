@@ -42,6 +42,14 @@ a new tab that opens where the old one was, and knowing whether the shell is bus
 | **bash** | `--posix` plus `ENV` |
 | **zsh** | `ZDOTDIR`, with all four startup files forwarded |
 | **fish** | `XDG_DATA_DIRS` plus `vendor_conf.d`, which fish loads on its own |
+| **PowerShell** | `-NoExit -Command ". integration.ps1"` — runs *after* the profiles, so it wraps the prompt they installed |
+
+The PowerShell one is the one Ghostty never had to write, and it is the easiest of the four to
+inject: `-Command` runs after every profile, so `$function:prompt` already holds whatever the
+user — or oh-my-posh, or starship — put there, and the script wraps it rather than replacing it.
+It also means `-NoProfile` still gets integration, which no profile-based mechanism could give.
+The C mark comes from wrapping PSReadLine's line reader, installed lazily from the first prompt
+because PSReadLine loads *after* `-Command` finishes.
 
 The bash one is the only surprising one. `--init-file` looks like the obvious hook and is silently
 ignored for a login shell, so it never runs for a great many people. POSIX mode sources `$ENV`
@@ -75,6 +83,7 @@ dotnet build src/Terminal.ShellIntegration -c Release
 python3 tools/check-shell-integration.py zsh   # a real shell, through a pty
 python3 tools/check-shell-integration.py bash /opt/homebrew/bin/bash
 python3 tools/check-shell-integration.py fish
+python3 tools/check-shell-integration.py pwsh
 ```
 
 Both halves are needed, and the second is not optional. Four bugs were found by running real shells
@@ -90,6 +99,24 @@ while the unit tests stayed green throughout — the C# side had the right answe
 - **OSC 7**: the path is unescaped by whoever reads it, so a directory named `a%2Fb` arrived as
   `a/b`. Only a well-formed escape corrupts — spaces and non-ASCII survive — so only the percent is
   escaped.
+
+PowerShell added three more, two of them in the harness rather than the script:
+
+- **Enter is CR.** The harness sent `\n`, which the tty line discipline maps for bash, zsh and
+  fish — but PSReadLine puts the tty in raw mode and reads keys itself, and LF is Ctrl+J to it.
+  Three commands became one line that never ran.
+- **Answer each terminal query once.** The harness gained a second answer to the cursor-position
+  query; .NET consumed the first, and the second was typed — `1;1R` in front of every command,
+  so every command was a parse error and even `exit` failed. The symptom looks exactly like a
+  broken shell, and it was a duplicated line in a list.
+- **`-Command` is history entry 1.** The script that loads via `-Command` is recorded in history,
+  so "history advanced since the last prompt" was true before the user typed anything and the
+  first prompt carried a D for a command nobody ran. The first prompt now only records where
+  history stands.
+
+Verified against pwsh 7.6.5 on macOS. **Windows is not yet verified**: the script emits
+`OSC 9;9` with a bare path there rather than `file://`, because `file://host/C:/x` decodes to
+`/C:/x`, and Windows PowerShell 5.1 is targeted by syntax but has not been run.
 
 The harness answers terminal queries as it goes. Modern shells interrogate the terminal before
 drawing anything — fish asks for the kitty keyboard flags, the terminal version, the background
