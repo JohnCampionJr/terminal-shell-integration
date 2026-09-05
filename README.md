@@ -22,6 +22,17 @@ else
 
 That is the whole API. Arguments and environment in, arguments and environment out.
 
+## Install
+
+```sh
+dotnet add package Terminal.ShellIntegration
+```
+
+The scripts ship inside the package and are copied into your app's output directory under
+`shell-integration/`, so `resourcesDirectory` is normally
+`Path.Combine(AppContext.BaseDirectory, "shell-integration")`. The library itself references
+nothing outside the BCL. MIT.
+
 ## What the shell then reports
 
 | | |
@@ -125,3 +136,7 @@ before the first prompt, which again looks exactly like integration that never l
 
 Verified against zsh 5.9, bash 5.3.15 and fish 4.8.1. macOS ships bash 3.2 from 2007, which does not
 source `$ENV` in POSIX mode at all; Ghostty documents the same limitation for the same bash.
+
+## License
+
+MIT. The injection mechanisms follow Ghostty's, which is MIT.

@@ -1,0 +1,75 @@
+# Build, test and pack on all three platforms, then run the real shells where the runners have
+# them. The unit tests cover the transform; the README is explicit that they are not enough --
+# every bug worth having found here was found by a real shell through a pty -- so the pty
+# harness is a required step, not a nicety. Hosted runners carry pwsh everywhere, bash 5 on
+# ubuntu, and zsh on macOS; fish is installed on ubuntu for the run. Windows has no pty for the
+# harness to open, so it builds, tests and packs only.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Terminal.ShellIntegration.slnx
+
+      - name: Build (Release)
+        run: dotnet build Terminal.ShellIntegration.slnx --configuration Release --no-restore
+
+      - name: Test (Release)
+        run: dotnet test Terminal.ShellIntegration.slnx --configuration Release --no-build
+
+      # The package must carry every script, dotfiles included: NuGet's default excludes once
+      # silently dropped zsh's four startup files while the nuspec still listed them.
+      - name: Pack (Release)
+        run: dotnet pack src/Terminal.ShellIntegration --configuration Release --no-build --output ./artifacts
+
+      - name: Check the package carries every script
+        shell: bash
+        run: |
+          count=$(unzip -l ./artifacts/*.nupkg | grep -c "contentFiles/any/any/shell-integration/")
+          echo "scripts in package: $count"
+          [ "$count" -eq 7 ] || { echo "::error::expected 7 scripts in the package, found $count"; exit 1; }
+
+      - name: Install fish (ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q fish
+
+      - name: Real shells through a pty (ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/check-shell-integration.py bash
+          python3 tools/check-shell-integration.py fish
+          python3 tools/check-shell-integration.py pwsh
+
+      # macOS ships bash 3.2, which does not source $ENV in POSIX mode; the README says so.
+      - name: Real shells through a pty (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python3 tools/check-shell-integration.py zsh
+          python3 tools/check-shell-integration.py pwsh

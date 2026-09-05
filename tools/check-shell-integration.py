@@ -164,7 +164,12 @@ missing = {"A", "B", "C", "D"} - kinds
 if missing:
     print(f"missing: {' '.join(sorted(missing))}")
     print("A = prompt start, B = prompt end, C = command start, D = command finished")
-else:
-    statuses = [m[1] for m in marks if m[0] == "D"]
-    print(f"all four marks present; exit statuses reported: {', '.join(statuses)}")
-    print("expected 0 then 1, since the second command was `false`")
+    sys.exit(1)
+
+statuses = [m[1] for m in marks if m[0] == "D"]
+print(f"all four marks present; exit statuses reported: {', '.join(statuses)}")
+print("expected 0 then 1, since the second command was `false`")
+# The verdict CI runs on: every mark, the two statuses in order, and a directory report.
+if statuses != ["0", "1"] or not cwd:
+    print("FAIL: statuses or working directory not as expected")
+    sys.exit(1)

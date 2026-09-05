@@ -5,16 +5,41 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Description>
-      Prepares a shell to report what it is doing — OSC 133 prompt marks and OSC 7 working
-      directory — by injecting integration at spawn. No UI, no PTY, no emulator: it turns a shell
-      path plus arguments and environment into the arguments and environment to spawn instead.
-    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>Terminal.ShellIntegration</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>John Campion Jr</Authors>
+    <Copyright>Copyright © John Campion Jr</Copyright>
+    <Description>Prepares a shell to report what it is doing — OSC 133 prompt marks and OSC 7 working directory — by injecting integration at spawn. No UI, no PTY, no emulator: it turns a shell path plus arguments and environment into the arguments and environment to spawn instead. bash, zsh, fish and PowerShell.</Description>
+    <PackageTags>terminal;shell;osc133;prompt;pty;bash;zsh;fish;powershell</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/JohnCampionJr/terminal-shell-integration</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JohnCampionJr/terminal-shell-integration</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <!-- NuGet's default excludes drop dotfiles from the package, and zsh's four startup files
+         are dotfiles. Without this the nuspec lists them and the archive lacks them. -->
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+    <!-- Local staging only; shiprig pushes to nuget.org from here. -->
+    <PackageOutputPath>$(MSBuildThisFileDirectory)../../local-feed</PackageOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The scripts must exist as real files on disk, because a shell sources a path. -->
-    <None Include="shell-integration/**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The scripts must exist as real files on disk, because a shell sources a path. For a
+         project reference they copy to the output directory; for a package consumer they travel
+         as contentFiles marked copy-to-output, so they land in the consuming app's output under
+         shell-integration/ the same way. Either way the host passes that directory to Prepare. -->
+    <None Include="shell-integration/**"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="true"
+          PackagePath="contentFiles/any/any/shell-integration/%(RecursiveDir)%(Filename)%(Extension)"
+          PackageCopyToOutput="true" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" Visible="false" />
   </ItemGroup>
 
 </Project>

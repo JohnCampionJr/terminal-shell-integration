@@ -2,3 +2,9 @@ bin/
 obj/
 *.user
 .DS_Store
+
+# Release credentials are read from the environment by shiprig. Never in the tree: this repo is public.
+.env
+.env.local
+artifacts/
+local-feed/

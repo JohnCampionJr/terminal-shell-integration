@@ -1,0 +1,13 @@
+{
+  "$schema": "https://rigsmith.dev/schemas/changeset-config.json",
+  "baseBranch": "main",
+  "access": "public",
+  "tagTemplate": "v${version}",
+  "paths": ["src"],
+  "ignore": [],
+  "dotnet": {
+    "sourcePath": "src",
+    "packageSource": "https://api.nuget.org/v3/index.json",
+    "oidc": "off"
+  }
+}
