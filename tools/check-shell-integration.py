@@ -129,17 +129,36 @@ def pump(fd, seconds, sink):
 
 chunks = []
 
-# Let it start up and settle, answering whatever it asks along the way.
-pump(fd, 2.0, chunks)
+PROMPT_END = re.compile(rb"\x1b\]133;B")
+
+
+def pump_until_prompt(fd, seconds, sink, prompts_seen):
+    """Pump until one more prompt-end mark (OSC 133;B) has arrived, or the ceiling passes."""
+    end = time.time() + seconds
+    while time.time() < end:
+        if not pump(fd, 0.05, sink):
+            return prompts_seen
+        seen = sum(len(PROMPT_END.findall(c)) for c in sink)
+        if seen > prompts_seen:
+            return seen
+    return prompts_seen
+
+
+# Type only once the shell is at a prompt. A fixed startup wait typed the first command into a
+# cold pwsh before PSReadLine was reading -- the first prompt drew and nothing ran after it,
+# which is exactly what a broken script looks like. Pacing on the B mark instead is both robust
+# on a slow machine and quick on a fast one; the ceiling is for a shell that never gets there.
+seen = pump_until_prompt(fd, 30.0, chunks, 0)
+pump(fd, 0.3, chunks)   # let the line editor finish initialising behind the prompt
 
 # Two commands with different exit statuses, so D can be checked for carrying the right one.
 # CR, not LF: Enter is 0x0D on the wire. The line discipline maps it for bash, zsh and fish, but
 # PSReadLine puts the tty in raw mode and reads keys itself, and LF is Ctrl+J to it -- three
 # commands sent with LF became one line that never ran.
 os.write(fd, b"echo hello\r")
-pump(fd, 1.0, chunks)
+seen = pump_until_prompt(fd, 10.0, chunks, seen)
 os.write(fd, b"false\r")
-pump(fd, 1.0, chunks)
+seen = pump_until_prompt(fd, 10.0, chunks, seen)
 os.write(fd, b"exit\r")
 pump(fd, 1.5, chunks)
 
